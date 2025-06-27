@@ -16,7 +16,8 @@ const announcementRoutes = require("./routes/announcements")
 const paymentRoutes = require("./routes/payments")
 const jobRoutes = require("./routes/jobs")
 // const messageRoutes = require("./routes/messages")
-const adminRoutes = require("./routes/admin")
+const dashboardRoutes = require("./routes/dashboard")
+const systemRoutes = require("./routes/system")
 const uploadRoutes = require("./routes/upload")
 
 // Import middleware
@@ -70,7 +71,8 @@ app.use("/api/announcements", announcementRoutes)
 app.use("/api/payments", paymentRoutes)
 app.use("/api/jobs", jobRoutes)
 // app.use("/api/messages", messageRoutes)
-app.use("/api/admin", adminRoutes)
+app.use("/api/dashboard", dashboardRoutes)
+app.use("/api/system", systemRoutes)
 app.use("/api/upload", uploadRoutes)
 
 // Health check endpoint

@@ -1,7 +1,13 @@
 const express = require("express")
 const { body, query, validationResult } = require("express-validator")
 const User = require("../models/User")
+const Event = require("../models/Event")
+const Announcement = require("../models/Announcement")
+const Payment = require("../models/Payment")
+const Job = require("../models/Job")
 const { authenticateToken, requireRole, optionalAuth } = require("../middleware/auth")
+
+const router = express.Router()
 
 /**
  * @swagger
@@ -175,6 +181,64 @@ const { authenticateToken, requireRole, optionalAuth } = require("../middleware/
  *               $ref: '#/components/schemas/Error'
  *       404:
  *         description: User not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+
+/**
+ * @swagger
+ * /api/users/summary:
+ *   get:
+ *     summary: Get user statistics summary
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: User statistics summary
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 totalUsers:
+ *                   type: object
+ *                   properties:
+ *                     count:
+ *                       type: integer
+ *                     changeFromLastMonth:
+ *                       type: number
+ *                 activeUsers:
+ *                   type: object
+ *                   properties:
+ *                     count:
+ *                       type: integer
+ *                     changeFromLastMonth:
+ *                       type: number
+ *                 admins:
+ *                   type: object
+ *                   properties:
+ *                     count:
+ *                       type: integer
+ *                     changeFromLastMonth:
+ *                       type: number
+ *                 newThisMonth:
+ *                   type: object
+ *                   properties:
+ *                     count:
+ *                       type: integer
+ *                     changeFromLastMonth:
+ *                       type: number
+ *       401:
+ *         description: Unauthorized
  *         content:
  *           application/json:
  *             schema:
@@ -412,7 +476,75 @@ const { authenticateToken, requireRole, optionalAuth } = require("../middleware/
  *               $ref: '#/components/schemas/Error'
  */
 
-const router = express.Router()
+// Get user statistics summary
+router.get("/summary", authenticateToken, requireRole(["alumni", "admin"]), async (req, res) => {
+  try {
+    const now = new Date()
+    const startOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1)
+    const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+    const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0)
+
+    // Calculate current statistics
+    const totalUsers = await User.countDocuments({})
+    const activeUsers = await User.countDocuments({ isActive: true })
+    const admins = await User.countDocuments({ role: 'admin' })
+    const newThisMonth = await User.countDocuments({
+      createdAt: { $gte: startOfThisMonth }
+    })
+
+    // Calculate last month statistics for comparison
+    const totalUsersLastMonth = await User.countDocuments({
+      createdAt: { $lt: startOfThisMonth }
+    })
+    const activeUsersLastMonth = await User.countDocuments({
+      isActive: true,
+      createdAt: { $lt: startOfThisMonth }
+    })
+    const adminsLastMonth = await User.countDocuments({
+      role: 'admin',
+      createdAt: { $lt: startOfThisMonth }
+    })
+    const newLastMonth = await User.countDocuments({
+      createdAt: {
+        $gte: startOfLastMonth,
+        $lte: endOfLastMonth
+      }
+    })
+
+    // Calculate percentage changes
+    const calculatePercentageChange = (current, previous) => {
+      if (previous === 0) return current > 0 ? 100 : 0
+      return Number(((current - previous) / previous * 100).toFixed(1))
+    }
+
+    const totalUsersChange = calculatePercentageChange(totalUsers, totalUsersLastMonth)
+    const activeUsersChange = calculatePercentageChange(activeUsers, activeUsersLastMonth)
+    const adminsChange = calculatePercentageChange(admins, adminsLastMonth)
+    const newThisMonthChange = calculatePercentageChange(newThisMonth, newLastMonth)
+
+    res.json({
+      totalUsers: {
+        count: totalUsers,
+        changeFromLastMonth: totalUsersChange
+      },
+      activeUsers: {
+        count: activeUsers,
+        changeFromLastMonth: activeUsersChange
+      },
+      admins: {
+        count: admins,
+        changeFromLastMonth: adminsChange
+      },
+      newThisMonth: {
+        count: newThisMonth,
+        changeFromLastMonth: newThisMonthChange
+      }
+    })
+  } catch (error) {
+    console.error("Get user summary error:", error)
+    res.status(500).json({ message: "Server error" })
+  }
+})
 
 // Get all users (alumni directory)
 router.get(
@@ -501,6 +633,128 @@ router.get(
   },
 )
 
+// ============== ADMIN USER MANAGEMENT ROUTES ==============
+// These routes are for admin-only user management operations
+// IMPORTANT: These must come BEFORE the /:id route to avoid conflicts
+
+/**
+ * @swagger
+ * /api/users/admin:
+ *   get:
+ *     summary: Get all users (Admin view with detailed information)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ */
+
+// Enhanced admin user management - Get all users with advanced filtering
+router.get(
+  "/admin",
+  authenticateToken,
+  requireRole(["admin"]),
+  [
+    query("page").optional().isInt({ min: 1 }),
+    query("limit").optional().isInt({ min: 1, max: 100 }),
+    query("role").optional().isIn(["alumni", "admin", "moderator"]),
+    query("status").optional().isIn(["active", "inactive"]),
+    query("search").optional().isString(),
+    query("graduationYear").optional().isInt(),
+    query("sortBy").optional().isIn(["name", "email", "role", "createdAt", "lastLogin"]),
+    query("sortOrder").optional().isIn(["asc", "desc"]),
+    query("verified").optional().isBoolean(),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req)
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() })
+      }
+
+      const page = Number.parseInt(req.query.page) || 1
+      const limit = Number.parseInt(req.query.limit) || 50
+      const skip = (page - 1) * limit
+      const sortBy = req.query.sortBy || "createdAt"
+      const sortOrder = req.query.sortOrder || "desc"
+
+      const filter = {}
+
+      // Apply filters
+      if (req.query.role) {
+        filter.role = req.query.role
+      }
+
+      if (req.query.status === "active") {
+        filter.isActive = true
+      } else if (req.query.status === "inactive") {
+        filter.isActive = false
+      }
+
+      if (req.query.graduationYear) {
+        filter["profile.graduationYear"] = Number.parseInt(req.query.graduationYear)
+      }
+
+      if (req.query.verified === "true") {
+        filter["verification.isEmailVerified"] = true
+        filter["verification.isPhoneVerified"] = true
+      } else if (req.query.verified === "false") {
+        filter.$or = [
+          { "verification.isEmailVerified": false },
+          { "verification.isPhoneVerified": false }
+        ]
+      }
+
+      // Text search
+      if (req.query.search) {
+        const searchRegex = new RegExp(req.query.search, 'i')
+        filter.$or = [
+          { firstName: searchRegex },
+          { lastName: searchRegex },
+          { email: searchRegex },
+          { phone: searchRegex }
+        ]
+      }
+
+      // Build sort object
+      const sort = {}
+      if (sortBy === "name") {
+        sort.firstName = sortOrder === "asc" ? 1 : -1
+      } else {
+        sort[sortBy] = sortOrder === "asc" ? 1 : -1
+      }
+
+      const users = await User.find(filter)
+        .select("firstName lastName email phone role isActive profile verification lastLogin createdAt updatedAt")
+        .sort(sort)
+        .skip(skip)
+        .limit(limit)
+
+      const total = await User.countDocuments(filter)
+
+      res.json({
+        users,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit),
+        },
+        filters: {
+          role: req.query.role,
+          status: req.query.status,
+          search: req.query.search,
+          graduationYear: req.query.graduationYear,
+          verified: req.query.verified,
+          sortBy,
+          sortOrder
+        }
+      })
+    } catch (error) {
+      console.error("Get users error:", error)
+      res.status(500).json({ message: "Server error" })
+    }
+  },
+)
+
 // Get user by ID
 router.get("/:id", optionalAuth, async (req, res) => {
   try {
@@ -536,6 +790,7 @@ router.get("/:id", optionalAuth, async (req, res) => {
 router.put(
   "/profile",
   authenticateToken,
+  requireRole(["alumni"]),
   [
     body("firstName").optional().trim().notEmpty().withMessage("First name cannot be empty"),
     body("lastName").optional().trim().notEmpty().withMessage("Last name cannot be empty"),
@@ -589,6 +844,7 @@ router.put(
 router.put(
   "/privacy",
   authenticateToken,
+  requireRole(["alumni"]),
   [
     body("emailNotifications").optional().isBoolean(),
     body("smsNotifications").optional().isBoolean(),
@@ -646,6 +902,7 @@ router.put(
 router.put(
   "/password",
   authenticateToken,
+  requireRole(["alumni"]),
   [
     body("currentPassword").notEmpty().withMessage("Current password is required"),
     body("newPassword").isLength({ min: 6 }).withMessage("New password must be at least 6 characters"),
@@ -686,6 +943,7 @@ router.put(
 router.delete(
   "/account",
   authenticateToken,
+  requireRole(["alumni"]),
   [body("password").notEmpty().withMessage("Password is required for account deletion")],
   async (req, res) => {
     try {
@@ -745,5 +1003,1003 @@ router.get("/filters/locations", async (req, res) => {
     res.status(500).json({ message: "Server error" })
   }
 })
+
+
+
+/**
+ * @swagger
+ * /api/users/admin:
+ *   post:
+ *     summary: Create new user (Admin only)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - firstName
+ *               - lastName
+ *               - email
+ *               - phone
+ *               - password
+ *               - role
+ *             properties:
+ *               firstName:
+ *                 type: string
+ *               lastName:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *                 format: email
+ *               phone:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *                 minLength: 6
+ *               role:
+ *                 type: string
+ *                 enum: [alumni, admin, moderator]
+ *               profile:
+ *                 type: object
+ *                 properties:
+ *                   graduationYear:
+ *                     type: integer
+ *                     minimum: 1950
+ *                   degree:
+ *                     type: string
+ *                   major:
+ *                     type: string
+ *                   profession:
+ *                     type: string
+ *                   company:
+ *                     type: string
+ *                   bio:
+ *                     type: string
+ *                   location:
+ *                     type: object
+ *                     properties:
+ *                       city:
+ *                         type: string
+ *                       country:
+ *                         type: string
+ *                   socialLinks:
+ *                     type: object
+ *                     properties:
+ *                       linkedin:
+ *                         type: string
+ *                       twitter:
+ *                         type: string
+ *                       facebook:
+ *                         type: string
+ *                       website:
+ *                         type: string
+ *                   skills:
+ *                     type: array
+ *                     items:
+ *                       type: string
+ *                   interests:
+ *                     type: array
+ *                     items:
+ *                       type: string
+ *     responses:
+ *       201:
+ *         description: User created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                 user:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     firstName:
+ *                       type: string
+ *                     lastName:
+ *                       type: string
+ *                     email:
+ *                       type: string
+ *                     phone:
+ *                       type: string
+ *                     role:
+ *                       type: string
+ *                     isActive:
+ *                       type: boolean
+ *                     profile:
+ *                       type: object
+ *                     preferences:
+ *                       type: object
+ *                     verification:
+ *                       type: object
+ *                     createdAt:
+ *                       type: string
+ *                       format: date-time
+ *       400:
+ *         description: Validation error or user already exists
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Insufficient permissions
+ *       500:
+ *         description: Server error
+ */
+
+// Admin create user
+router.post("/admin", authenticateToken, requireRole(["admin"]), [
+  body("firstName").trim().notEmpty().withMessage("First name is required"),
+  body("lastName").trim().notEmpty().withMessage("Last name is required"),
+  body("email").isEmail().withMessage("Valid email is required"),
+  body("phone").isMobilePhone().withMessage("Valid phone number is required"),
+  body("password").isLength({ min: 6 }).withMessage("Password must be at least 6 characters"),
+  body("role").isIn(["alumni", "admin", "moderator"]).withMessage("Invalid role"),
+  
+  // Profile validations (optional but with proper validation when provided)
+  body("profile.graduationYear").optional().isInt({ min: 1950, max: new Date().getFullYear() + 10 }).withMessage("Valid graduation year required"),
+  body("profile.degree").optional().isString().withMessage("Degree must be a string"),
+  body("profile.major").optional().isString().withMessage("Major must be a string"),
+  body("profile.profession").optional().isString().withMessage("Profession must be a string"),
+  body("profile.company").optional().isString().withMessage("Company must be a string"),
+  body("profile.bio").optional().isString().withMessage("Bio must be a string"),
+  body("profile.location.city").optional().isString().withMessage("City must be a string"),
+  body("profile.location.country").optional().isString().withMessage("Country must be a string"),
+  body("profile.socialLinks.linkedin").optional().isString().withMessage("LinkedIn URL must be a string"),
+  body("profile.socialLinks.twitter").optional().isString().withMessage("Twitter URL must be a string"),
+  body("profile.socialLinks.facebook").optional().isString().withMessage("Facebook URL must be a string"),
+  body("profile.socialLinks.website").optional().isString().withMessage("Website URL must be a string"),
+  body("profile.skills").optional().isArray().withMessage("Skills must be an array"),
+  body("profile.skills.*").optional().isString().withMessage("Each skill must be a string"),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req)
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() })
+    }
+
+    const { firstName, lastName, email, phone, password, role, profile } = req.body
+
+    // Check if user already exists
+    const existingUser = await User.findOne({
+      $or: [{ email }, { phone }],
+    })
+
+    if (existingUser) {
+      return res.status(400).json({ message: "User already exists with this email or phone" })
+    }
+
+    // Prepare profile data with defaults
+    const profileData = {
+      graduationYear: profile?.graduationYear || undefined, // Let MongoDB handle undefined for optional fields
+      degree: profile?.degree || "",
+      major: profile?.major || "",
+      profession: profile?.profession || "",
+      company: profile?.company || "",
+      bio: profile?.bio || "",
+      location: {
+        city: profile?.location?.city || "",
+        country: profile?.location?.country || ""
+      },
+      socialLinks: {
+        linkedin: profile?.socialLinks?.linkedin || "",
+        twitter: profile?.socialLinks?.twitter || "",
+        facebook: profile?.socialLinks?.facebook || "",
+        website: profile?.socialLinks?.website || ""
+      },
+      skills: profile?.skills || [],
+      interests: profile?.interests || []
+    }
+
+    // Create new user
+    const user = new User({
+      firstName,
+      lastName,
+      email,
+      phone,
+      password,
+      role,
+      profile: profileData,
+      verification: {
+        isEmailVerified: true, // Admin created users are pre-verified
+        isPhoneVerified: true,
+      },
+      preferences: {
+        emailNotifications: true,
+        smsNotifications: true,
+        pushNotifications: true,
+        privacy: {
+          showEmail: true,
+          showPhone: true,
+          showLocation: true
+        }
+      }
+    })
+
+    await user.save()
+
+    res.status(201).json({
+      message: "User created successfully",
+      user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        isActive: user.isActive,
+        profile: user.profile,
+        preferences: user.preferences,
+        verification: user.verification,
+        createdAt: user.createdAt
+      }
+    })
+  } catch (error) {
+    console.error("Admin create user error:", error)
+    
+    // Handle specific MongoDB validation errors
+    if (error.name === 'ValidationError') {
+      const validationErrors = Object.values(error.errors).map(err => ({
+        field: err.path,
+        message: err.message
+      }))
+      return res.status(400).json({ 
+        message: "Validation error", 
+        errors: validationErrors 
+      })
+    }
+    
+    // Handle duplicate key errors
+    if (error.code === 11000) {
+      const field = Object.keys(error.keyPattern)[0]
+      return res.status(400).json({ 
+        message: `User with this ${field} already exists` 
+      })
+    }
+    
+    res.status(500).json({ message: "Server error" })
+  }
+})
+
+/**
+ * @swagger
+ * /api/users/admin/{id}:
+ *   get:
+ *     summary: Get detailed user information (Admin only)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: User ID
+ *     responses:
+ *       200:
+ *         description: Detailed user information
+ *       404:
+ *         description: User not found
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Insufficient permissions
+ *       500:
+ *         description: Server error
+ */
+
+// Get detailed user by ID (Admin only)
+router.get("/admin/:id", authenticateToken, requireRole(["admin"]), async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id)
+      .select("-password") // Exclude password but include all other fields
+      .populate("profile")
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" })
+    }
+
+    // Get additional admin-relevant information
+    const userEvents = await Event.countDocuments({ 
+      $or: [
+        { organizer: user._id },
+        { "attendees.user": user._id }
+      ]
+    })
+
+    const userPayments = await Payment.countDocuments({ user: user._id })
+    const userAnnouncements = await Announcement.countDocuments({ author: user._id })
+    const userJobs = await Job.countDocuments({ postedBy: user._id })
+
+    res.json({
+      user: {
+        ...user.toObject(),
+        adminStats: {
+          eventsCount: userEvents,
+          paymentsCount: userPayments,
+          announcementsCount: userAnnouncements,
+          jobsCount: userJobs
+        }
+      }
+    })
+  } catch (error) {
+    console.error("Get user by ID error:", error)
+    res.status(500).json({ message: "Server error" })
+  }
+})
+
+/**
+ * @swagger
+ * /api/users/admin/{id}:
+ *   put:
+ *     summary: Update user information (Admin only)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: User ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               firstName:
+ *                 type: string
+ *               lastName:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *                 format: email
+ *               phone:
+ *                 type: string
+ *               role:
+ *                 type: string
+ *                 enum: [alumni, admin, moderator]
+ *               isActive:
+ *                 type: boolean
+ *               profile:
+ *                 type: object
+ *     responses:
+ *       200:
+ *         description: User updated successfully
+ *       400:
+ *         description: Validation error
+ *       404:
+ *         description: User not found
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Insufficient permissions
+ *       500:
+ *         description: Server error
+ */
+
+// Admin edit user
+router.put("/admin/:id", authenticateToken, requireRole(["admin"]), [
+  body("firstName").optional().trim().notEmpty().withMessage("First name cannot be empty"),
+  body("lastName").optional().trim().notEmpty().withMessage("Last name cannot be empty"),
+  body("email").optional().isEmail().withMessage("Valid email is required"),
+  body("phone").optional().isMobilePhone().withMessage("Valid phone number is required"),
+  body("role").optional().isIn(["alumni", "admin", "moderator"]).withMessage("Invalid role"),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req)
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() })
+    }
+
+    const user = await User.findById(req.params.id)
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" })
+    }
+
+    // Check if email/phone already exists (excluding current user)
+    if (req.body.email || req.body.phone) {
+      const existingUser = await User.findOne({
+        _id: { $ne: req.params.id },
+        $or: [
+          ...(req.body.email ? [{ email: req.body.email }] : []),
+          ...(req.body.phone ? [{ phone: req.body.phone }] : [])
+        ],
+      })
+
+      if (existingUser) {
+        return res.status(400).json({ message: "Email or phone already exists" })
+      }
+    }
+
+    // Update user fields
+    const updates = req.body
+    Object.keys(updates).forEach((key) => {
+      if (key === "profile" && updates.profile) {
+        Object.keys(updates.profile).forEach((profileKey) => {
+          if (updates.profile[profileKey] !== undefined) {
+            user.profile[profileKey] = updates.profile[profileKey]
+          }
+        })
+      } else if (updates[key] !== undefined) {
+        user[key] = updates[key]
+      }
+    })
+
+    await user.save()
+
+    res.json({
+      message: "User updated successfully",
+      user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        isActive: user.isActive,
+        profile: user.profile,
+        updatedAt: user.updatedAt
+      }
+    })
+  } catch (error) {
+    console.error("Admin edit user error:", error)
+    res.status(500).json({ message: "Server error" })
+  }
+})
+
+/**
+ * @swagger
+ * /api/users/admin/{id}:
+ *   delete:
+ *     summary: Delete user permanently (Admin only)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: User ID
+ *     responses:
+ *       200:
+ *         description: User deleted successfully
+ *       400:
+ *         description: Cannot delete own account
+ *       404:
+ *         description: User not found
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Insufficient permissions
+ *       500:
+ *         description: Server error
+ */
+
+// Admin delete user (hard delete)
+router.delete("/admin/:id", authenticateToken, requireRole(["admin"]), async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id)
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" })
+    }
+
+    // Prevent admin from deleting themselves
+    if (user._id.toString() === req.user._id.toString()) {
+      return res.status(400).json({ message: "Cannot delete your own account" })
+    }
+
+    // Hard delete - completely remove from database
+    await User.findByIdAndDelete(req.params.id)
+
+    res.json({
+      message: "User deleted successfully",
+      deletedUser: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email
+      }
+    })
+  } catch (error) {
+    console.error("Admin delete user error:", error)
+    res.status(500).json({ message: "Server error" })
+  }
+})
+
+/**
+ * @swagger
+ * /api/users/admin/{id}/role:
+ *   put:
+ *     summary: Update user role (Admin only)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: User ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - role
+ *             properties:
+ *               role:
+ *                 type: string
+ *                 enum: [alumni, admin, moderator]
+ *     responses:
+ *       200:
+ *         description: User role updated successfully
+ *       400:
+ *         description: Invalid role
+ *       404:
+ *         description: User not found
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Insufficient permissions
+ *       500:
+ *         description: Server error
+ */
+
+// Update user role
+router.put("/admin/:id/role", authenticateToken, requireRole(["admin"]), async (req, res) => {
+  try {
+    const { role } = req.body
+
+    if (!["alumni", "admin", "moderator"].includes(role)) {
+      return res.status(400).json({ message: "Invalid role" })
+    }
+
+    const user = await User.findById(req.params.id)
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" })
+    }
+
+    user.role = role
+    await user.save()
+
+    res.json({
+      message: "User role updated successfully",
+      user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        role: user.role,
+      },
+    })
+  } catch (error) {
+    console.error("Update user role error:", error)
+    res.status(500).json({ message: "Server error" })
+  }
+})
+
+/**
+ * @swagger
+ * /api/users/admin/{id}/status:
+ *   put:
+ *     summary: Activate/deactivate user (Admin only)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: User ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - isActive
+ *             properties:
+ *               isActive:
+ *                 type: boolean
+ *     responses:
+ *       200:
+ *         description: User status updated successfully
+ *       400:
+ *         description: Invalid status value
+ *       404:
+ *         description: User not found
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Insufficient permissions
+ *       500:
+ *         description: Server error
+ */
+
+// Deactivate/activate user
+router.put("/admin/:id/status", authenticateToken, requireRole(["admin"]), async (req, res) => {
+  try {
+    const { isActive } = req.body
+
+    if (typeof isActive !== "boolean") {
+      return res.status(400).json({ message: "isActive must be a boolean" })
+    }
+
+    const user = await User.findById(req.params.id)
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" })
+    }
+
+    user.isActive = isActive
+    await user.save()
+
+    res.json({
+      message: `User ${isActive ? "activated" : "deactivated"} successfully`,
+      user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        isActive: user.isActive,
+      },
+    })
+  } catch (error) {
+    console.error("Update user status error:", error)
+    res.status(500).json({ message: "Server error" })
+  }
+})
+
+/**
+ * @swagger
+ * /api/users/admin/bulk:
+ *   post:
+ *     summary: Bulk operations on users (Admin only)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - action
+ *               - userIds
+ *             properties:
+ *               action:
+ *                 type: string
+ *                 enum: [activate, deactivate, delete, changeRole]
+ *               userIds:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *               newRole:
+ *                 type: string
+ *                 enum: [alumni, admin, moderator]
+ *                 description: Required when action is changeRole
+ *     responses:
+ *       200:
+ *         description: Bulk operation completed successfully
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Insufficient permissions
+ *       500:
+ *         description: Server error
+ */
+
+// Bulk operations on users
+router.post("/admin/bulk", authenticateToken, requireRole(["admin"]), [
+  body("action").isIn(["activate", "deactivate", "delete", "changeRole"]).withMessage("Invalid action"),
+  body("userIds").isArray({ min: 1 }).withMessage("User IDs array is required"),
+  body("userIds.*").isMongoId().withMessage("Invalid user ID format"),
+  body("newRole").optional().isIn(["alumni", "admin", "moderator"]).withMessage("Invalid role")
+], async (req, res) => {
+  try {
+    const errors = validationResult(req)
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() })
+    }
+
+    const { action, userIds, newRole } = req.body
+
+    // Prevent admin from performing bulk operations on themselves
+    if (userIds.includes(req.user._id.toString())) {
+      return res.status(400).json({ message: "Cannot perform bulk operations on your own account" })
+    }
+
+    let result = {}
+
+    switch (action) {
+      case "activate":
+        result = await User.updateMany(
+          { _id: { $in: userIds } },
+          { isActive: true }
+        )
+        break
+
+      case "deactivate":
+        result = await User.updateMany(
+          { _id: { $in: userIds } },
+          { isActive: false }
+        )
+        break
+
+      case "delete":
+        result = await User.deleteMany({ _id: { $in: userIds } })
+        break
+
+      case "changeRole":
+        if (!newRole) {
+          return res.status(400).json({ message: "New role is required for changeRole action" })
+        }
+        result = await User.updateMany(
+          { _id: { $in: userIds } },
+          { role: newRole }
+        )
+        break
+    }
+
+    res.json({
+      message: `Bulk ${action} operation completed successfully`,
+      modifiedCount: result.modifiedCount || result.deletedCount,
+      requestedCount: userIds.length
+    })
+  } catch (error) {
+    console.error("Bulk operation error:", error)
+    res.status(500).json({ message: "Server error" })
+  }
+})
+
+/**
+ * @swagger
+ * /api/users/admin/export:
+ *   get:
+ *     summary: Export users data (Admin only)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: format
+ *         schema:
+ *           type: string
+ *           enum: [csv, json]
+ *           default: csv
+ *         description: Export format
+ *       - in: query
+ *         name: role
+ *         schema:
+ *           type: string
+ *           enum: [alumni, admin, moderator]
+ *         description: Filter by role
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [active, inactive]
+ *         description: Filter by status
+ *     responses:
+ *       200:
+ *         description: Users data exported successfully
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Insufficient permissions
+ *       500:
+ *         description: Server error
+ */
+
+// Export users data
+router.get("/admin/export", authenticateToken, requireRole(["admin"]), async (req, res) => {
+  try {
+    const { format = "csv", role, status } = req.query
+
+    const filter = {}
+    if (role) filter.role = role
+    if (status === "active") filter.isActive = true
+    else if (status === "inactive") filter.isActive = false
+
+    const users = await User.find(filter)
+      .select("-password")
+      .sort({ createdAt: -1 })
+
+    if (format === "json") {
+      res.setHeader('Content-Type', 'application/json')
+      res.setHeader('Content-Disposition', `attachment; filename="users-export-${Date.now()}.json"`)
+      return res.json(users)
+    }
+
+    // CSV export
+    const csvData = convertToCSV(users.map(user => ({
+      id: user._id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      phone: user.phone,
+      role: user.role,
+      isActive: user.isActive,
+      graduationYear: user.profile?.graduationYear || '',
+      degree: user.profile?.degree || '',
+      major: user.profile?.major || '',
+      profession: user.profile?.profession || '',
+      company: user.profile?.company || '',
+      location: user.profile?.location ? `${user.profile.location.city}, ${user.profile.location.country}` : '',
+      createdAt: user.createdAt,
+      lastLogin: user.lastLogin || 'Never'
+    })))
+
+    res.setHeader('Content-Type', 'text/csv')
+    res.setHeader('Content-Disposition', `attachment; filename="users-export-${Date.now()}.csv"`)
+    res.send(csvData)
+  } catch (error) {
+    console.error("Export users error:", error)
+    res.status(500).json({ message: "Server error" })
+  }
+})
+
+/**
+ * @swagger
+ * /api/users/admin/statistics:
+ *   get:
+ *     summary: Get user statistics (Admin only)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: User statistics
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Insufficient permissions
+ *       500:
+ *         description: Server error
+ */
+
+// Get user statistics
+router.get("/admin/statistics", authenticateToken, requireRole(["admin"]), async (req, res) => {
+  try {
+    const now = new Date()
+    const currentMonth = new Date(now.getFullYear(), now.getMonth(), 1)
+    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+
+    // Helper function to calculate percentage change
+    const calculatePercentageChange = (current, previous) => {
+      if (previous === 0) return current > 0 ? 100 : 0
+      return Math.round(((current - previous) / previous) * 100)
+    }
+
+    // Total users
+    const totalUsers = await User.countDocuments({ isActive: true })
+    const totalUsersLastMonth = await User.countDocuments({
+      isActive: true,
+      createdAt: { $lt: currentMonth }
+    })
+    const newUsersThisMonth = totalUsers - totalUsersLastMonth
+
+    const newUsersLastMonth = await User.countDocuments({
+      isActive: true,
+      createdAt: { $gte: lastMonth, $lt: currentMonth }
+    })
+
+    // Users by role
+    const usersByRole = await User.aggregate([
+      { $match: { isActive: true } },
+      { $group: { _id: "$role", count: { $sum: 1 } } }
+    ])
+
+    // Users by graduation year
+    const usersByGradYear = await User.aggregate([
+      { $match: { isActive: true, "profile.graduationYear": { $exists: true } } },
+      { $group: { _id: "$profile.graduationYear", count: { $sum: 1 } } },
+      { $sort: { _id: -1 } },
+      { $limit: 10 }
+    ])
+
+    // Active vs inactive users
+    const activeUsers = await User.countDocuments({ isActive: true })
+    const inactiveUsers = await User.countDocuments({ isActive: false })
+
+    // Recently registered users
+    const recentUsers = await User.find({ isActive: true })
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .select("firstName lastName email role createdAt")
+
+    // User engagement stats
+    const usersWithRecentLogin = await User.countDocuments({
+      isActive: true,
+      lastLogin: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
+    })
+
+    res.json({
+      totalUsers: {
+        value: totalUsers,
+        change: calculatePercentageChange(newUsersThisMonth, newUsersLastMonth),
+        label: "Total Active Users"
+      },
+      newUsersThisMonth: {
+        value: newUsersThisMonth,
+        change: calculatePercentageChange(newUsersThisMonth, newUsersLastMonth),
+        label: "New Users This Month"
+      },
+      usersByRole: usersByRole.reduce((acc, item) => {
+        acc[item._id] = item.count
+        return acc
+      }, {}),
+      usersByGradYear: usersByGradYear,
+      activeVsInactive: {
+        active: activeUsers,
+        inactive: inactiveUsers,
+        total: activeUsers + inactiveUsers
+      },
+      engagement: {
+        usersWithRecentLogin,
+        percentage: Math.round((usersWithRecentLogin / totalUsers) * 100)
+      },
+      recentUsers
+    })
+  } catch (error) {
+    console.error("User statistics error:", error)
+    res.status(500).json({ message: "Server error" })
+  }
+})
+
+// Helper function to convert JSON to CSV
+function convertToCSV(data) {
+  if (!data.length) return ""
+
+  const headers = Object.keys(data[0])
+  const csvHeaders = headers.join(",")
+
+  const csvRows = data.map((row) => {
+    return headers
+      .map((header) => {
+        const value = row[header]
+        return typeof value === "string" ? `"${value}"` : value
+      })
+      .join(",")
+  })
+
+  return [csvHeaders, ...csvRows].join("\n")
+}
+
+// ============== END ADMIN USER MANAGEMENT ROUTES ==============
+
+// ============== ALUMNI USER PROFILE ROUTES ==============
+// These routes are for alumni to manage their own profiles
+
+/**
+ * @swagger
+ * /api/users:
+ *   get:
+ *     summary: Get all users (alumni directory)
+ *     tags: [Users]
+ */
 
 module.exports = router

@@ -38,7 +38,7 @@ const userSchema = new mongoose.Schema(
     profile: {
       graduationYear: {
         type: Number,
-        required: true,
+        required: false,
       },
       degree: String,
       major: String,
