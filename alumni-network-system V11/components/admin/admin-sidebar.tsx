@@ -110,14 +110,9 @@ const sidebarItems: SidebarItem[] = [
         icon: Briefcase,
       },
       {
-        title: "Job Categories",
-        href: "/admin/jobs/categories",
-        icon: Database,
-      },
-      {
-        title: "Job Analytics",
-        href: "/admin/jobs/analytics",
-        icon: TrendingUp,
+        title: "Create Job",
+        href: "/admin/jobs?addJob=1",
+        icon: Briefcase,
       },
     ],
   },

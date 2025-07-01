@@ -80,6 +80,7 @@ import {
   type JobFilters,
   type BulkJobAction,
 } from "@/lib/api/jobsApi"
+import { useSearchParams, useRouter } from "next/navigation"
 
 function JobManagementContent() {
   // State management
@@ -148,6 +149,26 @@ function JobManagementContent() {
   useEffect(() => {
     setCurrentPage(1)
   }, [searchTerm, typeFilter, categoryFilter, statusFilter, experienceFilter])
+
+  const searchParams = useSearchParams();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (searchParams.get("addJob") === "1") {
+      setIsJobFormOpen(true);
+      setSelectedJob(undefined);
+    }
+  }, [searchParams]);
+
+  const handleCloseJobForm = () => {
+    setIsJobFormOpen(false);
+    setSelectedJob(undefined);
+    const params = new URLSearchParams(window.location.search);
+    if (params.has("addJob")) {
+      params.delete("addJob");
+      router.replace(window.location.pathname + (params.toString() ? `?${params.toString()}` : ""));
+    }
+  };
 
   // Show error state if both API calls fail
   if (summaryError && jobsError) {
@@ -812,10 +833,7 @@ function JobManagementContent() {
       <JobForm
         job={selectedJob}
         isOpen={isJobFormOpen}
-        onClose={() => {
-          setIsJobFormOpen(false)
-          setSelectedJob(undefined)
-        }}
+        onClose={handleCloseJobForm}
         onSubmit={selectedJob ? handleUpdateJob : handleCreateJob}
         isLoading={isCreating || isUpdating}
       />
