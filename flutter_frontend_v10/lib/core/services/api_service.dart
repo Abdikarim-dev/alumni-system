@@ -17,6 +17,7 @@ class ApiService {
   static Dio get dio => _dio;
 
   static VoidCallback? onLogout;
+  static bool _isLoggingOut = false;
 
   static void setupInterceptors() {
     _dio.interceptors.add(InterceptorsWrapper(
@@ -29,15 +30,26 @@ class ApiService {
         handler.next(options);
       },
       onError: (error, handler) async {
-        print(
-            '[Dio Interceptor] Error status: \\${error.response?.statusCode}, data: \\${error.response?.data}');
-        if (error.response?.statusCode == 401) {
+        print('[Dio Interceptor] Error detected!');
+        print('[Dio Interceptor] Status code: ${error.response?.statusCode}');
+        print('[Dio Interceptor] Error type: ${error.type}');
+        print('[Dio Interceptor] Error message: ${error.message}');
+        print('[Dio Interceptor] Response data: ${error.response?.data}');
+
+        if (error.response?.statusCode == 401 && !_isLoggingOut) {
           print(
               '[Dio Interceptor] 401 detected, clearing token and logging out.');
+          _isLoggingOut = true;
           await StorageService.clearToken();
           if (onLogout != null) {
+            print('[Dio Interceptor] Calling onLogout callback');
             onLogout!();
           }
+        } else if (error.response?.statusCode == 401) {
+          print(
+              '[Dio Interceptor] 401 detected but already logging out, skipping');
+        } else {
+          print('[Dio Interceptor] Non-401 error, not clearing tokens');
         }
         handler.next(error);
       },
@@ -113,5 +125,9 @@ class ApiService {
       queryParameters: queryParameters,
       options: options,
     );
+  }
+
+  static void resetLogoutFlag() {
+    _isLoggingOut = false;
   }
 }

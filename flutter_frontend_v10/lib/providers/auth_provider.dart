@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../core/models/user.dart';
 import '../core/services/auth_service.dart';
 import '../core/services/storage_service.dart';
+import '../core/services/api_service.dart';
 import 'package:go_router/go_router.dart';
 
 class AuthProvider with ChangeNotifier {
@@ -103,6 +104,8 @@ class AuthProvider with ChangeNotifier {
 
       print(
           '[AuthProvider] Login success, token and user saved. Notifying listeners for navigation.');
+      // Reset logout flag to allow future logout calls
+      ApiService.resetLogoutFlag();
       // Immediately notify listeners so GoRouter can navigate to /home
       notifyListeners();
 
@@ -118,8 +121,8 @@ class AuthProvider with ChangeNotifier {
           notifyListeners();
         } catch (e) {
           print('[AuthProvider] Background: /api/auth/me failed: $e');
-          // If /api/auth/me fails with 401, log out
-          if (e.toString().contains('401')) {
+          // Only log out if it's a 401 AND we still have a token (to prevent infinite loops)
+          if (e.toString().contains('401') && _token != null) {
             print('[AuthProvider] Background: /api/auth/me 401, logging out.');
             await logout();
           }
@@ -179,6 +182,7 @@ class AuthProvider with ChangeNotifier {
   }
 
   Future<void> logout() async {
+    print('[AuthProvider] Logout called');
     _user = null;
     _token = null;
     _error = null;
@@ -186,6 +190,7 @@ class AuthProvider with ChangeNotifier {
     await StorageService.clearToken();
     await StorageService.clearUser();
 
+    print('[AuthProvider] Logout completed, notifying listeners');
     notifyListeners();
   }
 
