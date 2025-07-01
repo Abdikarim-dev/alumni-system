@@ -6,6 +6,7 @@ const Announcement = require("../models/Announcement")
 const Payment = require("../models/Payment")
 const Job = require("../models/Job")
 const { authenticateToken, requireRole, optionalAuth } = require("../middleware/auth")
+const upload = require("../middleware/upload")
 
 const router = express.Router()
 
@@ -840,6 +841,136 @@ router.put(
   },
 )
 
+/**
+ * @swagger
+ * /api/users/me/photo:
+ *   post:
+ *     summary: Upload profile photo
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               photo:
+ *                 type: string
+ *                 format: binary
+ *                 description: Profile photo file (JPG, PNG, max 5MB)
+ *     responses:
+ *       200:
+ *         description: Profile photo uploaded successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                 profilePhoto:
+ *                   type: string
+ *                   description: URL of uploaded profile photo
+ *       400:
+ *         description: No file uploaded or invalid file
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *       401:
+ *         description: Unauthorized
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ */
+// Upload profile photo
+router.post(
+  "/me/photo",
+  authenticateToken,
+  requireRole(["alumni"]),
+  upload.single("photo"),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No photo uploaded" })
+      }
+
+      // Validate file type
+      const allowedTypes = ["image/jpeg", "image/jpg", "image/png"]
+      if (!allowedTypes.includes(req.file.mimetype)) {
+        return res.status(400).json({ message: "Invalid file type. Only JPG and PNG files are allowed" })
+      }
+
+      // Validate file size (5MB max)
+      const maxSize = 5 * 1024 * 1024 // 5MB
+      if (req.file.size > maxSize) {
+        return res.status(400).json({ message: "File size too large. Maximum size is 5MB" })
+      }
+
+      // Upload to Cloudinary
+      const cloudinary = require("cloudinary").v2
+      cloudinary.config({
+        cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+        api_key: process.env.CLOUDINARY_API_KEY,
+        api_secret: process.env.CLOUDINARY_API_SECRET,
+      })
+
+      const result = await new Promise((resolve, reject) => {
+        cloudinary.uploader.upload_stream(
+          {
+            resource_type: "image",
+            folder: "alumni-profiles",
+            public_id: `profile_${req.user._id}_${Date.now()}`,
+            transformation: [
+              { width: 400, height: 400, crop: "fill", gravity: "face" },
+              { quality: "auto" },
+            ],
+          },
+          (error, result) => {
+            if (error) reject(error)
+            else resolve(result)
+          }
+        ).end(req.file.buffer)
+      })
+
+      // Update user profile with photo URL
+      const user = await User.findById(req.user._id)
+      if (!user) {
+        return res.status(404).json({ message: "User not found" })
+      }
+
+      user.profile.profilePhoto = result.secure_url
+      await user.save()
+
+      res.json({
+        message: "Profile photo uploaded successfully",
+        profilePhoto: result.secure_url,
+      })
+    } catch (error) {
+      console.error("Upload profile photo error:", error)
+      res.status(500).json({ message: "Failed to upload profile photo" })
+    }
+  }
+)
+
 // Update privacy settings
 router.put(
   "/privacy",
@@ -1003,8 +1134,6 @@ router.get("/filters/locations", async (req, res) => {
     res.status(500).json({ message: "Server error" })
   }
 })
-
-
 
 /**
  * @swagger

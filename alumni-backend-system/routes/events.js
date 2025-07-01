@@ -1614,6 +1614,522 @@ router.get("/admin/export", authenticateToken, requireRole(["admin"]), [
  *               $ref: '#/components/schemas/Error'
  */
 
+/**
+ * @swagger
+ * /api/events/admin:
+ *   post:
+ *     summary: Create new event (Admin/Moderator only)
+ *     tags: [Events]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - title
+ *               - description
+ *               - type
+ *               - date
+ *               - location
+ *             properties:
+ *               title:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *               type:
+ *                 type: string
+ *                 enum: [reunion, webinar, fundraiser, networking, workshop, social, other]
+ *               date:
+ *                 type: object
+ *                 properties:
+ *                   start:
+ *                     type: string
+ *                     format: date-time
+ *                   end:
+ *                     type: string
+ *                     format: date-time
+ *               location:
+ *                 type: object
+ *                 properties:
+ *                   type:
+ *                     type: string
+ *                     enum: [physical, virtual, hybrid]
+ *               status:
+ *                 type: string
+ *                 enum: [draft, published, cancelled]
+ *                 default: draft
+ *     responses:
+ *       201:
+ *         description: Event created successfully
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Insufficient permissions
+ *       500:
+ *         description: Server error
+ */
+
+
+
+/**
+ * @swagger
+ * /api/events/admin/{id}:
+ *   put:
+ *     summary: Update event (Admin/Moderator only)
+ *     tags: [Events]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Event ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               title:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *               type:
+ *                 type: string
+ *                 enum: [reunion, webinar, fundraiser, networking, workshop, social, other]
+ *               date:
+ *                 type: object
+ *               location:
+ *                 type: object
+ *               status:
+ *                 type: string
+ *                 enum: [draft, published, cancelled]
+ *     responses:
+ *       200:
+ *         description: Event updated successfully
+ *       400:
+ *         description: Validation error
+ *       404:
+ *         description: Event not found
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Insufficient permissions
+ *       500:
+ *         description: Server error
+ */
+
+// Admin update event
+router.put("/admin/:id", authenticateToken, requireRole(["admin", "moderator"]), [
+  body("title").optional().trim().notEmpty().withMessage("Title cannot be empty"),
+  body("description").optional().notEmpty().withMessage("Description cannot be empty"),
+  body("type").optional().isIn(["reunion", "webinar", "fundraiser", "networking", "workshop", "social", "other"]).withMessage("Invalid event type"),
+  body("date.start").optional().isISO8601().withMessage("Valid start date is required"),
+  body("date.end").optional().isISO8601().withMessage("Valid end date is required"),
+  body("status").optional().isIn(["draft", "published", "cancelled"]).withMessage("Invalid status"),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req)
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() })
+    }
+
+    const event = await Event.findById(req.params.id)
+
+    if (!event) {
+      return res.status(404).json({ message: "Event not found" })
+    }
+
+    // Validate date logic if dates are being updated
+    if (req.body.date) {
+      const startDate = new Date(req.body.date.start || event.date.start)
+      const endDate = new Date(req.body.date.end || event.date.end)
+
+      if (endDate <= startDate) {
+        return res.status(400).json({ message: "End date must be after start date" })
+      }
+    }
+
+    // Update event fields
+    Object.keys(req.body).forEach((key) => {
+      if (req.body[key] !== undefined) {
+        if (key === "pricing" || key === "location" || key === "date" || key === "registration") {
+          Object.keys(req.body[key]).forEach((subKey) => {
+            if (req.body[key][subKey] !== undefined) {
+              event[key][subKey] = req.body[key][subKey]
+            }
+          })
+        } else {
+          event[key] = req.body[key]
+        }
+      }
+    })
+
+    await event.save()
+
+    const updatedEvent = await Event.findById(event._id).populate("organizer", "firstName lastName email")
+
+    res.json({
+      message: "Event updated successfully",
+      event: updatedEvent,
+    })
+  } catch (error) {
+    console.error("Admin update event error:", error)
+    res.status(500).json({ message: "Server error" })
+  }
+})
+
+/**
+ * @swagger
+ * /api/events/admin/{id}:
+ *   delete:
+ *     summary: Delete event permanently (Admin only)
+ *     tags: [Events]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Event ID
+ *     responses:
+ *       200:
+ *         description: Event deleted successfully
+ *       404:
+ *         description: Event not found
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Insufficient permissions
+ *       500:
+ *         description: Server error
+ */
+
+// Admin delete event
+router.delete("/admin/:id", authenticateToken, requireRole(["admin"]), async (req, res) => {
+  try {
+    const event = await Event.findById(req.params.id)
+
+    if (!event) {
+      return res.status(404).json({ message: "Event not found" })
+    }
+
+    await Event.findByIdAndDelete(req.params.id)
+
+    res.json({
+      message: "Event deleted successfully",
+      deletedEvent: {
+        id: event._id,
+        title: event.title,
+        type: event.type
+      }
+    })
+  } catch (error) {
+    console.error("Admin delete event error:", error)
+    res.status(500).json({ message: "Server error" })
+  }
+})
+
+/**
+ * @swagger
+ * /api/events/admin/statistics:
+ *   get:
+ *     summary: Get event statistics (Admin/Moderator only)
+ *     tags: [Events]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Event statistics
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Insufficient permissions
+ *       500:
+ *         description: Server error
+ */
+
+// Event statistics endpoint
+router.get("/admin/statistics", authenticateToken, requireRole(["admin", "moderator"]), async (req, res) => {
+  try {
+    const now = new Date()
+    const currentMonth = new Date(now.getFullYear(), now.getMonth(), 1)
+    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+    const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1)
+    const thirtyDaysFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
+
+    // Helper function to calculate percentage change
+    const calculatePercentageChange = (current, previous) => {
+      if (previous === 0) return current > 0 ? 100 : 0
+      return Math.round(((current - previous) / previous) * 100)
+    }
+
+    // Total Events
+    const totalEvents = await Event.countDocuments()
+    const totalEventsLastMonth = await Event.countDocuments({
+      createdAt: { $lt: currentMonth }
+    })
+    const totalEventsThisMonth = totalEvents - totalEventsLastMonth
+
+    // Upcoming Events (next 30 days)
+    const upcomingEvents = await Event.countDocuments({
+      "date.start": { $gte: now, $lte: thirtyDaysFromNow },
+      status: "published"
+    })
+
+    // Total Attendees across all events
+    const attendeesAggregation = await Event.aggregate([
+      { $match: { status: "published" } },
+      { $unwind: { path: "$attendees", preserveNullAndEmptyArrays: true } },
+      { $match: { "attendees.status": "registered" } },
+      { $count: "totalAttendees" }
+    ])
+    const totalAttendees = attendeesAggregation.length > 0 ? attendeesAggregation[0].totalAttendees : 0
+
+    // Revenue calculation (fixed field name)
+    const revenueAggregation = await Event.aggregate([
+      { $match: { status: "published", "registration.fee.amount": { $gt: 0 } } },
+      { $unwind: { path: "$attendees", preserveNullAndEmptyArrays: true } },
+      { $match: { "attendees.status": "registered" } },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: "$registration.fee.amount" }
+        }
+      }
+    ])
+    const totalRevenue = revenueAggregation.length > 0 ? revenueAggregation[0].totalRevenue : 0
+
+    // Events created this month for comparison
+    const eventsThisMonth = await Event.countDocuments({
+      createdAt: { $gte: currentMonth }
+    })
+    const eventsLastMonth = await Event.countDocuments({
+      createdAt: { $gte: lastMonth, $lt: currentMonth }
+    })
+
+    // Additional comprehensive statistics
+    
+    // Events by status
+    const eventsByStatus = await Event.aggregate([
+      {
+        $group: {
+          _id: "$status",
+          count: { $sum: 1 }
+        }
+      }
+    ])
+    
+    // Events by type
+    const eventsByType = await Event.aggregate([
+      {
+        $group: {
+          _id: "$type",
+          count: { $sum: 1 },
+          totalAttendees: {
+            $sum: {
+              $size: {
+                $filter: {
+                  input: "$attendees",
+                  cond: { $eq: ["$$this.status", "registered"] }
+                }
+              }
+            }
+          },
+          totalRevenue: {
+            $sum: {
+              $multiply: [
+                {
+                  $size: {
+                    $filter: {
+                      input: "$attendees",
+                      cond: { $eq: ["$$this.status", "registered"] }
+                    }
+                  }
+                },
+                { $ifNull: ["$registration.fee.amount", 0] }
+              ]
+            }
+          }
+        }
+      },
+      { $sort: { count: -1 } }
+    ])
+    
+    // Monthly event trends (last 12 months)
+    const monthlyTrends = await Event.aggregate([
+      {
+        $match: {
+          createdAt: { $gte: new Date(now.getFullYear() - 1, now.getMonth(), 1) }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            year: { $year: "$createdAt" },
+            month: { $month: "$createdAt" }
+          },
+          events: { $sum: 1 },
+          attendees: {
+            $sum: {
+              $size: {
+                $filter: {
+                  input: "$attendees",
+                  cond: { $eq: ["$$this.status", "registered"] }
+                }
+              }
+            }
+          },
+          revenue: {
+            $sum: {
+              $multiply: [
+                {
+                  $size: {
+                    $filter: {
+                      input: "$attendees",
+                      cond: { $eq: ["$$this.status", "registered"] }
+                    }
+                  }
+                },
+                { $ifNull: ["$registration.fee.amount", 0] }
+              ]
+            }
+          }
+        }
+      },
+      { $sort: { "_id.year": 1, "_id.month": 1 } }
+    ])
+    
+    // Top performing events
+    const topEvents = await Event.aggregate([
+      { $match: { status: "published" } },
+      {
+        $addFields: {
+          attendeeCount: {
+            $size: {
+              $filter: {
+                input: "$attendees",
+                cond: { $eq: ["$$this.status", "registered"] }
+              }
+            }
+          },
+          revenue: {
+            $multiply: [
+              {
+                $size: {
+                  $filter: {
+                    input: "$attendees",
+                    cond: { $eq: ["$$this.status", "registered"] }
+                  }
+                }
+              },
+              { $ifNull: ["$registration.fee.amount", 0] }
+            ]
+          }
+        }
+      },
+      { $sort: { attendeeCount: -1 } },
+      { $limit: 5 },
+      {
+        $lookup: {
+          from: "users",
+          localField: "organizer",
+          foreignField: "_id",
+          as: "organizerInfo"
+        }
+      },
+      {
+        $project: {
+          title: 1,
+          type: 1,
+          "date.start": 1,
+          attendeeCount: 1,
+          revenue: 1,
+          organizer: { $arrayElemAt: ["$organizerInfo.firstName", 0] }
+        }
+      }
+    ])
+
+    res.json({
+      // Main KPIs
+      totalEvents: {
+        value: totalEvents,
+        change: calculatePercentageChange(eventsThisMonth, eventsLastMonth),
+        label: "Total Events"
+      },
+      upcomingEvents: {
+        value: upcomingEvents,
+        label: "Upcoming Events",
+        period: "Next 30 days"
+      },
+      totalAttendees: {
+        value: totalAttendees,
+        label: "Total Attendees",
+        period: "Across all events"
+      },
+      revenue: {
+        value: totalRevenue,
+        label: "Revenue",
+        period: "Total event revenue",
+        formatted: `$${totalRevenue.toLocaleString()}`
+      },
+      
+      // Detailed analytics
+      analytics: {
+        eventsByStatus: eventsByStatus.reduce((acc, item) => {
+          acc[item._id] = item.count
+          return acc
+        }, {}),
+        
+        eventsByType: eventsByType.map(item => ({
+          type: item._id,
+          events: item.count,
+          attendees: item.totalAttendees,
+          revenue: item.totalRevenue,
+          avgAttendeesPerEvent: Math.round(item.totalAttendees / item.count)
+        })),
+        
+        monthlyTrends: monthlyTrends.map(item => ({
+          month: `${item._id.year}-${String(item._id.month).padStart(2, '0')}`,
+          events: item.events,
+          attendees: item.attendees,
+          revenue: item.revenue
+        })),
+        
+        topEvents: topEvents.map(event => ({
+          id: event._id,
+          title: event.title,
+          type: event.type,
+          date: event.date.start,
+          attendees: event.attendeeCount,
+          revenue: event.revenue,
+          organizer: event.organizer
+        })),
+        
+        // Additional metrics
+        averageAttendeesPerEvent: totalEvents > 0 ? Math.round(totalAttendees / totalEvents) : 0,
+        averageRevenuePerEvent: totalEvents > 0 ? Math.round(totalRevenue / totalEvents) : 0,
+        averageRevenuePerAttendee: totalAttendees > 0 ? Math.round(totalRevenue / totalAttendees) : 0
+      }
+    })
+  } catch (error) {
+    console.error("Event statistics error:", error)
+    res.status(500).json({ message: "Server error" })
+  }
+})
+
+// ============== END ADMIN/MODERATOR EVENT MANAGEMENT ROUTES ==============
+
 // ============== PUBLIC EVENT ROUTES ==============
 // These routes are accessible by all authenticated users
 
@@ -1684,68 +2200,144 @@ router.get(
   },
 )
 
-// Get events statistics summary
-router.get("/summary", authenticateToken, requireRole(["alumni", "admin"]), async (req, res) => {
+/**
+ * @swagger
+ * /api/events/summary:
+ *   get:
+ *     summary: Get events summary statistics (Alumni, Admin)
+ *     tags: [Events]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Events summary statistics
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 totalEvents:
+ *                   type: object
+ *                   properties:
+ *                     count:
+ *                       type: integer
+ *                     changeFromLastMonth:
+ *                       type: number
+ *                 publishedEvents:
+ *                   type: object
+ *                   properties:
+ *                     count:
+ *                       type: integer
+ *                     changeFromLastMonth:
+ *                       type: number
+ *                 upcomingEvents:
+ *                   type: object
+ *                   properties:
+ *                     count:
+ *                       type: integer
+ *                     period:
+ *                       type: string
+ *                 eventsThisMonth:
+ *                   type: object
+ *                   properties:
+ *                     count:
+ *                       type: integer
+ *                     changeFromLastMonth:
+ *                       type: number
+ *                 totalAttendees:
+ *                   type: object
+ *                   properties:
+ *                     count:
+ *                       type: integer
+ *                     label:
+ *                       type: string
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Server error
+ */
+
+// Events summary statistics
+router.get("/summary", authenticateToken, requireRole(["alumni", "admin", "moderator"]), async (req, res) => {
   try {
     const now = new Date()
-    const startOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1)
-    const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-    const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0)
-    const thirtyDaysFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+    const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000)
+    const nextThirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
+    
+    // Get current month and last month dates
+    const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+    const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0)
 
-    // Calculate current statistics
-    const totalEvents = await Event.countDocuments({})
-    const publishedEvents = await Event.countDocuments({ status: "published" })
-    const upcomingEvents = await Event.countDocuments({
-      "date.start": { $gte: now },
-      status: "published"
-    })
-    const eventsThisMonth = await Event.countDocuments({
-      createdAt: { $gte: startOfThisMonth }
-    })
-
-    // Calculate last month statistics for comparison
+    // Total events
+    const totalEvents = await Event.countDocuments()
     const totalEventsLastMonth = await Event.countDocuments({
-      createdAt: { $lt: startOfThisMonth }
+      createdAt: { $gte: sixtyDaysAgo, $lt: thirtyDaysAgo }
     })
+    const changeFromLastMonth = totalEventsLastMonth > 0 
+      ? ((totalEvents - totalEventsLastMonth) / totalEventsLastMonth) * 100 
+      : totalEvents > 0 ? 100 : 0
+
+    // Published events
+    const publishedEvents = await Event.countDocuments({ status: "published" })
     const publishedEventsLastMonth = await Event.countDocuments({
       status: "published",
-      createdAt: { $lt: startOfThisMonth }
+      createdAt: { $gte: sixtyDaysAgo, $lt: thirtyDaysAgo }
+    })
+    const publishedChangeFromLastMonth = publishedEventsLastMonth > 0 
+      ? ((publishedEvents - publishedEventsLastMonth) / publishedEventsLastMonth) * 100 
+      : publishedEvents > 0 ? 100 : 0
+
+    // Upcoming events (next 30 days)
+    const upcomingEvents = await Event.countDocuments({
+      "date.start": { $gte: now, $lte: nextThirtyDays },
+      status: "published"
+    })
+
+    // Events this month
+    const eventsThisMonth = await Event.countDocuments({
+      createdAt: { $gte: currentMonthStart }
     })
     const eventsLastMonth = await Event.countDocuments({
-      createdAt: {
-        $gte: startOfLastMonth,
-        $lte: endOfLastMonth
-      }
+      createdAt: { $gte: lastMonthStart, $lte: lastMonthEnd }
     })
+    const eventsThisMonthChange = eventsLastMonth > 0 
+      ? ((eventsThisMonth - eventsLastMonth) / eventsLastMonth) * 100 
+      : eventsThisMonth > 0 ? 100 : 0
 
-    // Calculate total attendees
-    const attendeesAggregation = await Event.aggregate([
-      { $match: { status: "published" } },
-      { $unwind: { path: "$attendees", preserveNullAndEmptyArrays: true } },
-      { $match: { "attendees.status": "registered" } },
-      { $count: "totalAttendees" }
+    // Total attendees across all events
+    const eventsWithAttendees = await Event.aggregate([
+      {
+        $project: {
+          attendeeCount: {
+            $size: {
+              $filter: {
+                input: "$attendees",
+                cond: { $eq: ["$$this.status", "registered"] }
+              }
+            }
+          }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalAttendees: { $sum: "$attendeeCount" }
+        }
+      }
     ])
-    const totalAttendees = attendeesAggregation.length > 0 ? attendeesAggregation[0].totalAttendees : 0
 
-    // Calculate percentage changes
-    const calculatePercentageChange = (current, previous) => {
-      if (previous === 0) return current > 0 ? 100 : 0
-      return Number(((current - previous) / previous * 100).toFixed(1))
-    }
-
-    const totalEventsChange = calculatePercentageChange(totalEvents, totalEventsLastMonth)
-    const publishedEventsChange = calculatePercentageChange(publishedEvents, publishedEventsLastMonth)
-    const eventsThisMonthChange = calculatePercentageChange(eventsThisMonth, eventsLastMonth)
+    const totalAttendees = eventsWithAttendees[0]?.totalAttendees || 0
 
     res.json({
       totalEvents: {
         count: totalEvents,
-        changeFromLastMonth: totalEventsChange
+        changeFromLastMonth: Math.round(changeFromLastMonth * 100) / 100
       },
       publishedEvents: {
         count: publishedEvents,
-        changeFromLastMonth: publishedEventsChange
+        changeFromLastMonth: Math.round(publishedChangeFromLastMonth * 100) / 100
       },
       upcomingEvents: {
         count: upcomingEvents,
@@ -1753,7 +2345,7 @@ router.get("/summary", authenticateToken, requireRole(["alumni", "admin"]), asyn
       },
       eventsThisMonth: {
         count: eventsThisMonth,
-        changeFromLastMonth: eventsThisMonthChange
+        changeFromLastMonth: Math.round(eventsThisMonthChange * 100) / 100
       },
       totalAttendees: {
         count: totalAttendees,
@@ -1761,7 +2353,7 @@ router.get("/summary", authenticateToken, requireRole(["alumni", "admin"]), asyn
       }
     })
   } catch (error) {
-    console.error("Get events summary error:", error)
+    console.error("Events summary error:", error)
     res.status(500).json({ message: "Server error" })
   }
 })
