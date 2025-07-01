@@ -86,10 +86,7 @@ import {
 } from "@/lib/api/adminApi"
 import type { User } from "@/types"
 import type { CreateUserRequest, UpdateUserRequest } from "@/lib/api/adminApi"
-
-
-
-
+import { useSearchParams } from "next/navigation"
 
 function UserManagementContent() {
   // State management
@@ -132,10 +129,6 @@ function UserManagementContent() {
     sortOrder,
   })
 
-
-
-
-
   const [createUser, { isLoading: isCreating, error: createError }] = useCreateUserMutation()
   const [updateUser, { isLoading: isUpdating, error: updateError }] = useUpdateUserMutation()
   const [deleteUser, { isLoading: isDeleting }] = useDeleteUserMutation()
@@ -166,6 +159,15 @@ function UserManagementContent() {
   useEffect(() => {
     setCurrentPage(1)
   }, [searchTerm, roleFilter, statusFilter, graduationYearFilter])
+
+  const searchParams = useSearchParams();
+
+  useEffect(() => {
+    if (searchParams.get("addUser") === "1") {
+      setIsUserFormOpen(true);
+      setSelectedUser(undefined);
+    }
+  }, [searchParams]);
 
   // Show error state if both API calls fail
   if (summaryError && usersError) {

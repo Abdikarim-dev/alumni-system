@@ -85,6 +85,7 @@ import {
 } from "@/lib/api/eventsApi"
 import type { Event } from "@/types"
 import type { CreateEventRequest, UpdateEventRequest } from "@/lib/api/eventsApi"
+import { useSearchParams, useRouter } from "next/navigation"
 
 function EventManagementContent() {
   // State management
@@ -148,6 +149,16 @@ function EventManagementContent() {
   useEffect(() => {
     setCurrentPage(1)
   }, [searchTerm, typeFilter, statusFilter])
+
+  const searchParams = useSearchParams();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (searchParams.get("addEvent") === "1") {
+      setIsEventFormOpen(true);
+      setSelectedEvent(undefined);
+    }
+  }, [searchParams]);
 
   // Show error state if both API calls fail
   if (summaryError && eventsError) {
@@ -364,6 +375,16 @@ function EventManagementContent() {
       setSelectedEvents([])
     }
   }
+
+  const handleCloseEventForm = () => {
+    setIsEventFormOpen(false);
+    setSelectedEvent(undefined);
+    const params = new URLSearchParams(window.location.search);
+    if (params.has("addEvent")) {
+      params.delete("addEvent");
+      router.replace(window.location.pathname + (params.toString() ? `?${params.toString()}` : ""));
+    }
+  };
 
   return (
     <div className="flex h-screen bg-background">
@@ -844,10 +865,7 @@ function EventManagementContent() {
       <EventForm
         event={selectedEvent}
         isOpen={isEventFormOpen}
-        onClose={() => {
-          setIsEventFormOpen(false)
-          setSelectedEvent(undefined)
-        }}
+        onClose={handleCloseEventForm}
         onSubmit={selectedEvent ? handleUpdateEvent : handleCreateEvent}
         isLoading={selectedEvent ? isUpdating : isCreating}
         error={selectedEvent ? (updateError as any)?.data?.message : (createError as any)?.data?.message}

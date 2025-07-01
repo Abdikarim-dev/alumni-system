@@ -31,6 +31,7 @@ import {
 import { useSelector, useDispatch } from "react-redux"
 import type { RootState } from "@/lib/store"
 import { logout } from "@/lib/slices/authSlice"
+import { UserForm } from "@/components/admin/user-form"
 
 interface SidebarItem {
   title: string
@@ -38,6 +39,7 @@ interface SidebarItem {
   icon: React.ComponentType<{ className?: string }>
   badge?: string
   children?: SidebarItem[]
+  isAction?: boolean
 }
 
 const sidebarItems: SidebarItem[] = [
@@ -57,14 +59,9 @@ const sidebarItems: SidebarItem[] = [
         icon: Users,
       },
       {
-        title: "User Roles",
-        href: "/admin/users/roles",
+        title: "Create User",
+        href: "/admin/users?addUser=1",
         icon: UserCheck,
-      },
-      {
-        title: "User Activity",
-        href: "/admin/users/activity",
-        icon: TrendingUp,
       },
     ],
   },
@@ -80,13 +77,8 @@ const sidebarItems: SidebarItem[] = [
       },
       {
         title: "Create Event",
-        href: "/admin/events/create",
+        href: "/admin/events?addEvent=1",
         icon: Calendar,
-      },
-      {
-        title: "Event Analytics",
-        href: "/admin/events/analytics",
-        icon: TrendingUp,
       },
     ],
   },
@@ -297,21 +289,33 @@ export function AdminSidebar({ className }: AdminSidebarProps) {
               {item.children && expandedItems.includes(item.href) && (
                 <div className="ml-4 mt-1 space-y-1">
                   {item.children.map((child) => (
-                    <Button
-                      key={child.href}
-                      variant={pathname === child.href ? "secondary" : "ghost"}
-                      size="sm"
-                      className={cn(
-                        "w-full justify-start h-8",
-                        pathname === child.href && "bg-secondary"
-                      )}
-                      asChild
-                    >
-                      <Link href={child.href}>
+                    child.isAction ? (
+                      <Button
+                        key={child.title}
+                        variant="ghost"
+                        size="sm"
+                        className="w-full justify-start h-8"
+                      >
                         <child.icon className="mr-2 h-3 w-3" />
                         <span className="text-xs">{child.title}</span>
-                      </Link>
-                    </Button>
+                      </Button>
+                    ) : (
+                      <Button
+                        key={child.href}
+                        variant={pathname === child.href ? "secondary" : "ghost"}
+                        size="sm"
+                        className={cn(
+                          "w-full justify-start h-8",
+                          pathname === child.href && "bg-secondary"
+                        )}
+                        asChild
+                      >
+                        <Link href={child.href}>
+                          <child.icon className="mr-2 h-3 w-3" />
+                          <span className="text-xs">{child.title}</span>
+                        </Link>
+                      </Button>
+                    )
                   ))}
                 </div>
               )}

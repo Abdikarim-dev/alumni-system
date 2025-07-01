@@ -1,201 +1,161 @@
-# Authentication & Route Protection System
+# Authentication System Documentation
 
 ## Overview
-The alumni network system now has comprehensive authentication and route protection implemented to handle user sessions properly and prevent unauthorized access.
+
+The Alumni Network System implements a comprehensive authentication system with JWT token validation, role-based access control, and automatic redirection based on user authentication status.
 
 ## Key Components
 
-### 1. Route Guard (`components/auth/route-guard.tsx`)
-- **Purpose**: Protects pages by checking authentication status and user roles
-- **Features**:
-  - Checks if user is authenticated
-  - Validates user roles (admin, moderator, alumni)
-  - Redirects unauthorized users to login
-  - Shows loading state during authentication checks
-  - Waits for Redux rehydration from localStorage
+### 1. Token Validation Utilities (`lib/utils/tokenUtils.ts`)
 
-### 2. Enhanced Login Form (`components/auth/login-form.tsx`)
-- **Purpose**: Handles user authentication with proper state management
-- **Features**:
-  - Saves token and user data to localStorage
-  - Updates Redux store with authentication state
-  - Redirects based on user role after login
-  - Prevents already authenticated users from seeing login form
-  - Shows loading state during redirects
+Provides utility functions for token management:
 
-### 3. Login Page Protection (`app/auth/login/page.tsx`)
-- **Purpose**: Redirects already authenticated users away from login page
-- **Features**:
-  - Checks authentication status on page load
-  - Redirects authenticated users to appropriate dashboard
-  - Shows loading state during redirect
+- `isTokenValid(token)`: Checks if a JWT token exists and is not expired (full validation)
+- `isTokenQuickValid(token)`: Quick validation without JWT decoding (for performance)
+- `getTokenFromStorage()`: Retrieves token from localStorage
+- `getUserFromStorage()`: Retrieves user data from localStorage
+- `clearAuthStorage()`: Clears all authentication data from localStorage
 
-### 4. API Configuration (`lib/api.ts`)
-- **Purpose**: Handles API authentication and token management
-- **Features**:
-  - Automatically includes Bearer token in API requests
-  - Handles 401 errors by logging out users
-  - Redirects to login page on authentication failures
-  - Prevents redirect loops
+### 2. Background Token Validation (`hooks/useTokenValidation.ts`)
 
-### 5. Auth Slice (`lib/slices/authSlice.ts`)
-- **Purpose**: Manages authentication state in Redux
-- **Features**:
-  - Stores user data and token
-  - Handles login/logout actions
-  - Rehydrates state from localStorage
-  - Clears localStorage on logout
+- Runs token validation in the background every 5 minutes
+- Automatically clears expired tokens
+- Doesn't block the UI or slow down navigation
 
-## Protected Routes
+### 3. Main Entry Point (`app/page.tsx`)
 
-### Admin Routes (Require admin role)
-- `/admin/dashboard` - Admin dashboard with system overview
-- `/admin/users` - User management interface
-- `/admin/events` - Event management
-- `/admin/announcements` - Announcement management
-- `/admin/jobs` - Job management
+The first page users encounter that:
 
-### General Routes (Require any authenticated user)
-- `/dashboard` - Main user dashboard
-- `/events` - Events listing
-- `/profile` - User profile management
+1. **Quick token check** in localStorage (no JWT decoding for speed)
+2. **Immediate redirection** based on authentication status:
+   - If token exists → Redirects to appropriate dashboard based on user role
+   - If no token → Redirects to login page
+3. **Sets Redux state** from localStorage if token exists
+4. **Background validation** handles token expiration separately
 
-### Public Routes (No authentication required)
-- `/auth/login` - Login page (redirects if authenticated)
-- `/auth/register` - Registration page
-- `/auth/forgot-password` - Password reset
+### 4. Route Guards
 
-## Authentication Flow
+#### RouteGuard (`components/auth/route-guard.tsx`)
+Protects individual pages by:
+- Quick authentication check (no JWT decoding)
+- Validating user roles
+- Redirecting unauthorized users
+- Supporting role hierarchy (admin > moderator > alumni)
 
-### 1. Initial Page Load
+#### AuthGuard (`components/auth/auth-guard.tsx`)
+Alternative route guard with similar functionality but different implementation approach.
+
+### 5. Authentication Flow
+
 ```
-1. App starts → Redux Provider initializes
-2. Redux Provider checks localStorage for token/user
-3. If found, dispatches setAuthFromStorage action
-4. Route Guard checks authentication status
-5. If authenticated, renders protected content
-6. If not authenticated, redirects to login
-```
+User visits app → 
+Quick localStorage check (no JWT decode) → 
+Token exists? → 
+  Yes: Set Redux state & redirect to dashboard immediately
+  No: Redirect to login immediately
 
-### 2. Login Process
-```
-1. User submits login form
-2. API call to /auth/login endpoint
-3. On success:
-   - Save token and user to localStorage
-   - Update Redux store with setAuthFromStorage
-   - Redirect based on user role:
-     - admin → /admin/dashboard
-     - moderator → /moderator/dashboard  
-     - alumni → /dashboard
-4. On failure, show error message
-```
-
-### 3. Logout Process
-```
-1. User clicks logout OR API returns 401
-2. Dispatch logout action
-3. Clear token and user from localStorage
-4. Clear Redux auth state
-5. Redirect to /auth/login
-```
-
-### 4. API Request Authentication
-```
-1. API request initiated
-2. baseQuery prepareHeaders runs
-3. Gets token from Redux state
-4. Adds Authorization: Bearer {token} header
-5. If API returns 401:
-   - Dispatch logout action
-   - Redirect to login page
-```
-
-## Role-Based Access Control
-
-### Admin Users
-- Can access all admin routes
-- Can manage users, events, announcements, jobs
-- Full system access
-
-### Moderator Users  
-- Can access moderator routes
-- Limited admin functionality
-- Cannot access user management
-
-### Alumni Users
-- Can access general user routes
-- Cannot access admin/moderator routes
-- Standard user functionality
-
-## Security Features
-
-1. **Token Expiration Handling**: Automatic logout on expired tokens
-2. **Route Protection**: Prevents unauthorized access to protected routes
-3. **Role Validation**: Ensures users can only access appropriate content
-4. **Secure Storage**: Uses localStorage for token persistence
-5. **Redirect Prevention**: Prevents redirect loops and unauthorized access
-6. **Loading States**: Proper loading indicators during auth checks
-
-## Environment Setup
-
-Create `.env.local` file:
-```env
-NEXT_PUBLIC_API_URL=http://localhost:5000/api
+Background: Periodic token validation every 5 minutes
 ```
 
 ## Usage Examples
 
 ### Protecting a Page
+
 ```tsx
 import { RouteGuard } from "@/components/auth/route-guard"
 
 export default function ProtectedPage() {
   return (
     <RouteGuard requiredRole="admin">
-      <AdminContent />
+      <YourPageContent />
     </RouteGuard>
   )
 }
 ```
 
-### Accessing User Data
-```tsx
-import { useSelector } from "react-redux"
-import { type RootState } from "@/lib/store"
+### Role-Based Access
 
-function UserProfile() {
-  const { user, isAuthenticated } = useSelector((state: RootState) => state.auth)
-  
-  if (!isAuthenticated) return null
-  
-  return <div>Welcome, {user?.firstName}!</div>
+```tsx
+// Admin only
+<RouteGuard requiredRole="admin">
+
+// Admin or moderator
+<RouteGuard requiredRole="moderator">
+
+// Any authenticated user (admin, moderator, or alumni)
+<RouteGuard>
+```
+
+### Dashboard Redirection
+
+The system automatically redirects users to appropriate dashboards:
+
+- **Admin users** → `/admin/dashboard`
+- **Moderator users** → `/moderator/dashboard`
+- **Alumni users** → `/dashboard`
+
+## Token Management
+
+### Storage
+- Tokens are stored in `localStorage` as "token"
+- User data is stored in `localStorage` as "user"
+- Both are automatically managed by the auth slice
+
+### Validation
+- Tokens are validated using JWT decode
+- Expiration is checked against current timestamp
+- Invalid tokens are automatically cleared
+
+### Security
+- Tokens are cleared on logout
+- Expired tokens are automatically removed
+- Failed validation redirects to login
+
+## Redux Integration
+
+The authentication state is managed in Redux (`lib/slices/authSlice.ts`):
+
+```typescript
+interface AuthState {
+  user: User | null
+  token: string | null
+  isAuthenticated: boolean
+  isLoading: boolean
+  error: string | null
 }
 ```
 
-## Troubleshooting
+### Key Actions
+- `setAuthFromStorage`: Restores auth state from localStorage
+- `logout`: Clears all auth data
+- `loginUser`: Handles login process
+- `registerUser`: Handles registration process
 
-### Common Issues
+## Error Handling
 
-1. **"User logged out immediately after login"**
-   - Check if backend API is running
-   - Verify NEXT_PUBLIC_API_URL in .env.local
-   - Check browser console for 401 errors
+- Network errors redirect to login
+- Invalid tokens are automatically cleared
+- Role mismatches redirect to appropriate dashboard
+- All errors are logged to console for debugging
 
-2. **"Infinite loading on protected pages"**
-   - Check Redux rehydration timing
-   - Verify localStorage has token and user data
-   - Check RouteGuard timeout settings
+## Best Practices
 
-3. **"Can access admin pages as regular user"**
-   - Verify RouteGuard requiredRole prop
-   - Check user role in Redux state
-   - Ensure API returns correct user role
+1. **Always use RouteGuard** for protected pages
+2. **Check user roles** before rendering sensitive content
+3. **Handle loading states** during authentication checks
+4. **Clear storage** on logout or token expiration
+5. **Use role hierarchy** for access control (admin > moderator > alumni)
 
-### Debug Steps
+## Environment Variables
 
-1. Check Redux DevTools for auth state
-2. Check localStorage for token/user data
-3. Check Network tab for API requests
-4. Check Console for error messages
-5. Verify backend API responses
+Make sure to set:
+```
+NEXT_PUBLIC_API_URL=your_api_url_here
+```
+
+## Dependencies
+
+- `jwt-decode`: For token validation
+- `@reduxjs/toolkit`: For state management
+- `next/navigation`: For routing
+- `lucide-react`: For loading icons

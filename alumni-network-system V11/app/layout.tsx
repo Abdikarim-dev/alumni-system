@@ -6,6 +6,7 @@ import { ReduxProvider } from "@/components/providers/redux-provider"
 import { StripeProvider } from "@/components/providers/stripe-provider"
 import { ThemeProvider } from "@/components/theme-provider"
 import { Toaster } from "@/components/ui/toaster"
+import { TokenValidationProvider } from "@/components/providers/token-validation-provider"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -27,8 +28,10 @@ export default function RootLayout({
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <ReduxProvider>
             <StripeProvider>
-              {children}
-              <Toaster />
+              <TokenValidationProvider>
+                {children}
+                <Toaster />
+              </TokenValidationProvider>
             </StripeProvider>
           </ReduxProvider>
         </ThemeProvider>

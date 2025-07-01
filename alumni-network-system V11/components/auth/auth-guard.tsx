@@ -1,37 +1,37 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
-import { useSelector } from "react-redux"
 import { useDispatch } from "react-redux"
+import { useSelector } from "react-redux"
 import { setAuthFromStorage } from "@/lib/slices/authSlice"
 import { isTokenValid, getTokenFromStorage, getUserFromStorage, clearAuthStorage } from "@/lib/utils/tokenUtils"
 import { type RootState } from "@/lib/store"
 import { Loader2 } from "lucide-react"
 
-interface RouteGuardProps {
-  children: React.ReactNode
+interface AuthGuardProps {
+  children: ReactNode
   requiredRole?: "admin" | "moderator" | "alumni"
-  redirectTo?: string
+  fallbackPath?: string
 }
 
-export function RouteGuard({ 
+export function AuthGuard({ 
   children, 
-  requiredRole, 
-  redirectTo = "/auth/login" 
-}: RouteGuardProps) {
+  requiredRole = "alumni", 
+  fallbackPath = "/auth/login" 
+}: AuthGuardProps) {
   const router = useRouter()
   const dispatch = useDispatch()
-  const { isAuthenticated, user, token } = useSelector((state: RootState) => state.auth)
-  const [isLoading, setIsLoading] = useState(true)
+  const { isAuthenticated, user } = useSelector((state: RootState) => state.auth)
+  const [isChecking, setIsChecking] = useState(true)
 
   useEffect(() => {
     const checkAuth = () => {
       try {
         // If already authenticated, check role
-        if (isAuthenticated && user && token) {
+        if (isAuthenticated && user) {
           if (hasRequiredRole(user.role, requiredRole)) {
-            setIsLoading(false)
+            setIsChecking(false)
             return
           } else {
             // User doesn't have required role, redirect to appropriate dashboard
@@ -41,38 +41,36 @@ export function RouteGuard({
         }
 
         // Check localStorage for token
-        const storedToken = getTokenFromStorage()
+        const token = getTokenFromStorage()
         const storedUser = getUserFromStorage()
 
-        if (storedToken && storedUser && storedToken.length > 10) {
+        if (token && storedUser && token.length > 10) {
           // Quick validation - set auth state immediately
-          dispatch(setAuthFromStorage({ user: storedUser, token: storedToken }))
+          dispatch(setAuthFromStorage({ user: storedUser, token }))
           
           if (hasRequiredRole(storedUser.role, requiredRole)) {
-            setIsLoading(false)
+            setIsChecking(false)
           } else {
             redirectToUserDashboard(storedUser.role)
           }
         } else {
           clearAuthStorage()
-          router.push(redirectTo)
+          router.push(fallbackPath)
         }
       } catch (error) {
         console.error("Error checking authentication:", error)
         clearAuthStorage()
-        router.push(redirectTo)
+        router.push(fallbackPath)
       } finally {
-        setIsLoading(false)
+        setIsChecking(false)
       }
     }
 
     // Immediate check without delay
     checkAuth()
-  }, [isAuthenticated, user, token, requiredRole, router, redirectTo, dispatch])
+  }, [isAuthenticated, user, router, dispatch, requiredRole, fallbackPath])
 
-  const hasRequiredRole = (userRole: string, requiredRole?: string): boolean => {
-    if (!requiredRole) return true
-    
+  const hasRequiredRole = (userRole: string, requiredRole: string): boolean => {
     const roleHierarchy = {
       admin: 3,
       moderator: 2,
@@ -92,8 +90,7 @@ export function RouteGuard({
     }
   }
 
-  // Show loading spinner while checking authentication
-  if (isLoading) {
+  if (isChecking) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
         <div className="flex flex-col items-center space-y-4">
@@ -109,6 +106,5 @@ export function RouteGuard({
     )
   }
 
-  // If we reach here, user is authenticated and has proper role
   return <>{children}</>
 } 
